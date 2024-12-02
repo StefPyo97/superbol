@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 version = '2.5'
-
 '''
     SUPERBOL: Supernova Bolometric Light Curves
     Written by Matt Nicholl, 2015-2022
@@ -101,6 +100,8 @@ import sys
 import os
 # If you don't have astropy, can comment this out, and uncomment cosmocalc routine
 from astropy.coordinates import Distance
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import Matern, RBF, RationalQuadratic, ExpSineSquared, WhiteKernel
 #from lmfit import Parameters, Model
 import warnings
 
@@ -113,14 +114,14 @@ print('    *                                       *')
 print('    *        Welcome to `SUPER BOL`!        *')
 print('    *   SUPernova BOLometric light curves   *')
 print('    *                                       *')
-print('    *                ______                 *')
-print('    *               {\   */}                *')
-print('    *                 \__/                  *')
-print('    *                  ||                   *')
-print('    *                 ====                  *')
+print('    *                                       *')
+print('    *                                       *')
+print('    *                                       *')
+print('    *                                       *')
+print('    *                                       *')
 print('    *                                       *')
 print('    *   Matt Nicholl (2018, RNAAS, 2, 230)  *')
-print('    *                 V'+version+'                *')
+print('    *                 V'+version+'          *')
 print('    *                                       *')
 print('    * * * * * * * * * * * * * * * * * * * * *\n\n')
 
@@ -128,6 +129,7 @@ print('    * * * * * * * * * * * * * * * * * * * * *\n\n')
 plt.ion()
 
 # Define some functions:
+
 
 def easyint(x,y,err,xref,yref):
     '''
@@ -161,6 +163,53 @@ def easyint(x,y,err,xref,yref):
     errout[errout>1.2] = 1.2
 
     return yout,errout
+
+
+def apply_gaussian_process(times, luminosities, new_times, kernel_choice="Matern", **kernel_params):
+    """
+    Estrapola e corregge le curve bolometriche usando un Gaussian Process con kernel selezionabile.
+
+    Args:
+        times (array-like): Tempi osservati (1D).
+        luminosities (array-like): Luminosità associate ai tempi (1D).
+        new_times (array-like): Nuovi tempi per l'estrapolazione (1D).
+        kernel_choice (str): Kernel scelto (opzioni: "Matern", "RBF", "RationalQuadratic",
+                            "ExpSineSquared", "DotProduct", "WhiteKernel").
+        **kernel_params: Parametri aggiuntivi per il kernel.
+
+    Returns:
+        tuple: Predizioni e incertezze (std).
+    """
+    # Definizione kernel disponibili
+    kernels = {
+        "Matern": Matern(**kernel_params) + WhiteKernel(**kernel_params),
+        "RBF": RBF(**kernel_params),
+        "RationalQuadratic": RationalQuadratic(**kernel_params),
+        "ExpSineSquared": ExpSineSquared(**kernel_params),
+        "WhiteKernel": WhiteKernel(**kernel_params),
+    }
+
+    # Assicura numpy array in forma corretta
+    times = np.array(times).reshape(-1, 1)
+    luminosities = np.array(luminosities)
+    new_times = np.array(new_times).reshape(-1, 1)
+
+    # Controlla kernel scelto
+    if kernel_choice not in kernels:
+        raise ValueError(f"Kernel '{kernel_choice}' not supported. Choose between {', '.join(kernels.keys())}")
+    kernel = kernels[kernel_choice]
+
+    # Modello di Gaussian Process
+    gp = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10)
+
+    # Addestramento del modello
+    gp.fit(times, luminosities)
+
+    # Predizione sui nuovi dati
+    predictions, uncertainties = gp.predict(new_times, return_std=True)
+
+    return predictions, uncertainties
+
 
 
 def cosmocalc(z):
@@ -323,13 +372,7 @@ print('\n######### Step 1: input files and filters ##########')
 useInt = 'n'
 
 # SN name defines names of input and output files
-files = os.listdir("example")
-sn_available = list(set(["_".join(f.split("_")[:-1]) for f in files if "README" not in f]))
-print(sn_available)
-print('\n> Enter SN name:   '+sn_available[0])
-sn = sn_available[0]
-#sn = input('\n> Enter SN name:   ')
-
+sn = input('\n> Enter SN name:   ')
 
 if not sn:
     print('\n* No name given; lets just call it `SN`...')
@@ -342,9 +385,7 @@ if not os.path.exists(outdir): os.makedirs(outdir)
 
 
 # Get photometry files
-do1 = "y"
-print('\n> Find input files automatically?[y]   '+do1)
-#do1 = input('\n> Find input files automatically?[y]   ')
+do1 = input('\n> Find input files automatically?[y]   ')
 if not do1: do1='y'
 # User will almost always want to do this automatically, if files follow naming convention!
 
@@ -360,10 +401,7 @@ if do1 == 'y':
         for i in range(len(files)):
             print('  ', i, ':', files[i])
 
-        use = 'n'
-        print('\n> Use interpolated LC? (e.g. 0,2 for files 0 and 2, or n for no) [0]')
-        print(' (Warning: using multiple interpolation files can cause problems unless times match!)   '+use)
-        #use = input('\n> Use interpolated LC? (e.g. 0,2 for files 0 and 2, or n for no) [0]\n (Warning: using multiple interpolation files can cause problems unless times match!)   ')
+        use = input('\n> Use interpolated LC? (e.g. 0,2 for files 0 and 2, or n for no) [0]\n (Warning: using multiple interpolation files can cause problems unless times match!)   ')
         # Default is to read in the first interpolation file
         # Multiple interpolations can be read using commas, BUT if time axes don't match then the phases can end up incorrectly defined for some bands!!!
         if not use: use1.append(0)
@@ -380,7 +418,7 @@ if do1 == 'y':
     if len(files)==0 or use=='n':
         # And here is if we don't have (or want) previously interpolated data
         # search for any files matching with SN name
-        files = glob.glob("**/"+sn+'_*', recursive=True)
+        files = glob.glob(sn+'_*')
 
         if len(files)>0:
             # If files are found, print them and let the user choose which ones to read in
@@ -389,9 +427,7 @@ if do1 == 'y':
             for i in range(len(files)):
                 print('  ', i, ':', files[i])
 
-            use = ""
-            print('\n> Specify files to use (e.g. 0,2 for files 0 and 2) [all]   ')
-            # use = input('\n> Specify files to use (e.g. 0,2 for files 0 and 2) [all]   ')
+            use = input('\n> Specify files to use (e.g. 0,2 for files 0 and 2) [all]   ')
             if len(use)>0:
                 # Include only specified files
                 for i in use.split(','):
@@ -518,9 +554,7 @@ plt.tight_layout(pad=0.5)
 plt.draw()
 
 
-limitMJDs = "n"
-print('\n> Limit time range to use? [n]   '+limitMJDs)
-#limitMJDs = input('\n> Limit time range to use? [n]   ')
+limitMJDs = input('\n> Limit time range to use? [n] ')
 if not limitMJDs: limitMJDs = 'n'
 
 if limitMJDs == 'y':
@@ -561,10 +595,7 @@ print('\n######### Step 2: reference band for phase info ##########')
 print('\n* Displaying all available photometry...')
 
 # User can choose to include only a subset of filters, e.g. if they see that some don't have very useful data
-t3 = filters
-print('\n> Enter bands to use (blue to red) ['+filters+']   '+t3)
-#print([wle[filt] for filt in filters])
-#t3 = input('\n> Enter bands to use (blue to red) ['+filters+']   ')
+t3 = input('\n> Enter bands to use (blue to red) ['+filters+']   ').upper()
 if not t3: t3 = filters
 
 filters = ''
@@ -590,9 +621,7 @@ for i in filters:
 
 # If using light curves that have not yet been interpolated by a previous superbol run, we need a reference filter
 if useInt!='y':
-    ref = ref3
-    print('\n> Choose reference band(s) for sampling epochs (Comma delimited)\n   Suggested (most LC points): ['+ref3+']   '+ref)
-    #ref = input('\n> Choose reference band(s) for sampling epochs (Comma delimited)\n   Suggested (most LC points): ['+ref3+']   ')
+    ref = input('\n> Choose reference band(s) for sampling epochs (Comma delimited)\n   Suggested (most LC points): ['+ref3+']   ').upper()
     # Defaults to the band with the most data
     if not ref: ref = ref3
     ref_list = ref.split(',')
@@ -616,9 +645,7 @@ ref_stack = ref_stack[ref_stack[:,0].argsort()]
 
 # User may want to have output in terms of days from maximum, so here we find max light in reference band
 # Two options: fit light curve interactively, or just use brightest point. User specifies what they want to do
-t1 = "n"
-print('\n> Interactively find maximum?[n]   '+t1)
-#t1 = input('\n> Interactively find maximum?[n] ')
+t1 = input('\n> Interactively find maximum?[n] ')
 if not t1:
     # Default to not doing interactive fit
     t1 = 'n'
@@ -775,9 +802,7 @@ plt.draw()
 skipK = 'n'
 
 # Input redshift or distance modulus, needed for flux -> luminosity
-z = '10'
-print('\n> Please enter SN redshift or distance modulus:[0]   '+z)
-#z = input('\n> Please enter SN redshift or distance modulus:[0]   ')
+z = input('\n> Please enter SN redshift or distance modulus:[0]  ')
 # Default to zero
 if not z: z=0
 z = float(z)
@@ -895,17 +920,120 @@ if useInt!='y':
         lc_int[ref_list[0]] = lc[ref_list[0]]
 
     # User decides whether to fit each light curve
-    t4 = "y"
-    print('\n> Interpolate light curves interactively?[y] '+t4)
     #t4 = input('\n> Interpolate light curves interactively?[y] ')
     # Default is yes
-    if not t4: t4 = 'y'
+    #if not t4: t4 = 'y'
 
-    if t4=='y':
+    #if t4=='y':
+    # Use need to choose if gaussian process or polinomyal fit
+
+    print("What method do you want to use for the fit?")
+    print("1: Polinomyal fit")
+    print("2: Gaussian process fit")
+    use_gp = input("Insert the number of preferred method ((1-2) [2]: ").strip()
+
+
+    use_gp_map = {
+        '1': "Polinomyal fit",
+        '2': "Gaussian process fit"
+    }
+
+    selected_gp = use_gp_map.get(use_gp, "Gaussian process fit")  # Default il Gaussian process
+
+    if use_gp == '2':
+        print('\n### Begin Gaussian Process fit... ###')
+
+        # Dizionario per salvare i risultati del Gaussian Process
+        lc_int_gp = {}
+         # Use this to keep tabs on method used, and append to output file
+        intKey = '\n# Reference bands: '
+        for refband in ref_list:
+            intKey += refband
+
+
+        for band in filters:
+            
+
+            # if n_refs == 1 and band in ref_list:
+            #     print(f'\n### Reference Band is {band} ###')
+            #     pass
+            
+            if band in ref_list:
+                print(f'\n### Reference Band is {band} ###')
+                continue
+            
+            print(f'\n### Gaussian Process for {band}-band ###')
+            
+                
+            #else:
+            valid = ~np.isnan(lc[band][:, 1])  
+            times = lc[band][valid, 0]  #zp_AB[band] * 10**(-0.4 * mags)  #Conversione in un fusso lineare
+            luminosities = lc[band][valid, 1]
+            new_times = ref_stack[:, 0]  
+
+            happy_gp = 'n'
+            while happy_gp == 'n':
+                # Scegli il kernel
+                print("\nChoose the appropriate kernel for Gaussian Process fit:")
+                print("1: Matern")
+                print("2: RBF")
+                print("3: RationalQuadratic")
+                print("4: ExpSineSquared")
+                print("5: WhiteKernel")
+                kernel_choice = input("Inserisci il numero del kernel scelto (1-5) [1]: ").strip()
+
+                kernel_map = {
+                    '1': "Matern",
+                    '2': "RBF",
+                    '3': "RationalQuadratic",
+                    '4': "ExpSineSquared",
+                    '5': "WhiteKernel"
+                }
+
+                selected_kernel = kernel_map.get(kernel_choice, "Matern")  # Default a Matérn
+                print(f"\nFitting {band}-band with {selected_kernel} kernel...")
+
+                try:
+                    #
+                    predictions, uncertainties = apply_gaussian_process(
+                        times, luminosities, new_times, kernel_choice=selected_kernel
+                    )
+
+                
+                    lc_int[band] = np.column_stack((new_times, predictions, uncertainties))
+
+                    
+                    plt.clf()
+                    plt.errorbar(times, luminosities, lc[band][valid, 2], fmt='o', color=cols[band], label=f'{band}-band')
+                    plt.errorbar(ref_stack[:, 0], ref_stack[:, 1], ref_stack[:, 2], fmt='o', color='0.5', label='Ref band')
+                    plt.plot(new_times, predictions, color='b', label='GP fit')
+                    plt.fill_between(new_times, predictions - uncertainties, predictions + uncertainties,
+                                     color='b', alpha=0.2, label='GP uncertainty')
+                    plt.gca().invert_yaxis()
+                    plt.legend(numpoints=1, fontsize=16, ncol=2, frameon=True)
+                    plt.xlabel(xlab)
+                    plt.ylabel('Magnitude')
+                    plt.tight_layout(pad=0.5)
+                    plt.draw()
+
+                except Exception as e:
+                    print(f"Error in Gaussian Process fit: {e}")
+                    continue
+
+                # Chiedi all'utente se è soddisfatto del fit
+                happy_gp = input('\n> Are you happy with the Gaussian Process fit? (y/[n]): ').strip().lower()
+                if not happy_gp:
+                    happy_gp = 'n'
+
+        print("\n### Gaussian Process fitting completed! ###")
+
+
+    elif use_gp == '1':
         print('\n### Begin polynomial fit... ###')
 
         # Interpolate / extrapolate other bands to same epochs - polynomial fits
         # - what if there are only one or two points??? Use colour?
+
 
         # Use this to keep tabs on method used, and append to output file
         intKey = '\n# Reference bands: '
@@ -938,9 +1066,7 @@ if useInt!='y':
                     plt.draw()
 
                     # Choose order of polynomial fit to use
-                    order = 'q'
-                    print('\n>> Order of polynomial to fit?(q to quit and use constant colour)['+str(order1)+']   '+order)
-                    #order = input('\n>> Order of polynomial to fit?(q to quit and use constant colour)['+str(order1)+']   ')
+                    order = input('\n>> Order of polynomial to fit?(q to quit and use constant colour)['+str(order1)+']   ')
                     # If user decides they can't get a good fit, enter q to use simple linear interpolation and constant-colour extrapolation
                     if order == 'q':
                         break
@@ -968,9 +1094,7 @@ if useInt!='y':
                     plt.draw()
 
                     # Check if happy with fit
-                    happy = 'y'
-                    print('\n> Happy with fit?(y/[n])   '+happy)
-                    #happy = input('\n> Happy with fit?(y/[n])   ')
+                    happy = input('\n> Happy with fit?(y/[n])   ')
                     # Default to no
                     if not happy: happy = 'n'
 
@@ -1064,9 +1188,7 @@ if useInt!='y':
 
                     if len(tmp[tmp[:,0]<low])>0:
                         # If there are early extrapolated points, ask user whether they prefer polynomial, constant colour, or want to hedge their bets
-                        extraptype = 'p'
-                        print('\n> Early-time extrapolation:\n  [P-olynomial], c-onstant colour, or a-verage of two methods?   '+extraptype)
-                        #extraptype = input('\n> Early-time extrapolation:\n  [P-olynomial], c-onstant colour, or a-verage of two methods?\n')
+                        extraptype = input('\n> Early-time extrapolation:\n  [P-olynomial], c-onstant colour, or a-verage of two methods?\n')
                         # Default to polynomial
                         if not extraptype: extraptype = 'p'
                         if extraptype == 'c':
@@ -1083,9 +1205,7 @@ if useInt!='y':
 
                     # Now do same for late times
                     if len(tmp[tmp[:,0]>up])>0:
-                        extraptype = 'c'
-                        extraptype = input('\n> Late-time extrapolation:\n  [P-olynomial], c-onstant colour, or a-verage of two methods?    '+extraptype)
-                        #extraptype = input('\n> Late-time extrapolation:\n  [P-olynomial], c-onstant colour, or a-verage of two methods?\n')
+                        extraptype = input('\n> Late-time extrapolation:\n  [P-olynomial], c-onstant colour, or a-verage of two methods?\n')
                         if not extraptype: extraptype = 'p'
                         if extraptype == 'c':
                             tmp[:,1][tmp[:,0]>up]=late
@@ -1163,10 +1283,8 @@ else:
 print('\n######### Step 5: Extinction and K-corrections #########')
 
 # Extinction correction
-ebv = '0'
-print('\n> Please enter Galactic E(B-V): \n'+'  (0 if data are already extinction-corrected) [0]   ',ebv)
-#ebv = input('\n> Please enter Galactic E(B-V): \n'
-#                        '  (0 if data are already extinction-corrected) [0]   ')
+ebv = input('\n> Please enter Galactic E(B-V): \n'
+                        '  (0 if data are already extinction-corrected) [0]   ')
 if not ebv: ebv=0
 ebv = float(ebv)
 
@@ -1193,9 +1311,7 @@ for i in lc_int:
 print('\nDefault photometric systems:')
 print(default_sys)
 
-is_correct_system = 'y'
-print('\n> Are all bands in their default systems? ([y]/n)  ',is_correct_system)
-#is_correct_system = input('\n> Are all bands in their default systems? ([y]/n)  ')
+is_correct_system = input('\n> Are all bands in their default systems? ([y]/n)  ')
 if not is_correct_system: is_correct_system = 'y'
 
 systems = {}
@@ -1300,9 +1416,7 @@ Lbb_opt_err_arr = []
 bluecut = 1
 sup = 0
 
-do_absorb = 'n'
-print('\n> Absorbed blackbody L_uv(lam) = L_bb(lam)*(lam/lam_max)^x\n can give better fit in UV. Apply absorption? [n]   ',do_absorb)
-#do_absorb = input('\n> Absorbed blackbody L_uv(lam) = L_bb(lam)*(lam/lam_max)^x\n can give better fit in UV. Apply absorption? [n]   ')
+do_absorb = input('\n> Absorbed blackbody L_uv(lam) = L_bb(lam)*(lam/lam_max)^x\n can give better fit in UV. Apply absorption? [n]   ')
 if not do_absorb: do_absorb = 'n'
 
 if do_absorb in ('y','yes'):
@@ -1317,18 +1431,14 @@ if do_absorb in ('y','yes'):
 # NOTE: at some point should give option to make these free parameters...
 
 
-T_init = '10000'
-print('\n> Initial guess for starting temperature [10000 K]?   ',T_init)
-#T_init = input('\n> Initial guess for starting temperature [10000 K]?   ')
+T_init = input('\n> Initial guess for starting temperature [10000 K]?   ')
 if not T_init: T_init = 10000
 T_init = float(T_init)
 
 T_init /= 1000
 
 
-R_init = '1.0e15'
-print('\n> Initial guess for starting radius [1.0e15 cm]?   ',R_init)
-#R_init = input('\n> Initial guess for starting radius [1.0e15 cm]?   ')
+R_init = input('\n> Initial guess for starting radius [1.0e15 cm]?   ')
 if not R_init: R_init = 1.0e15
 R_init = float(R_init)
 
@@ -1592,4 +1702,4 @@ plt.savefig(outdir+'/results_'+sn+'_'+filters+'.pdf')
 
 
 # Wait for key press before closing plots!
-#fin = input('\n\n> PRESS RETURN TO EXIT...\n')
+fin = input('\n\n> PRESS RETURN TO EXIT...\n')
